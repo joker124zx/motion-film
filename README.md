@@ -35,7 +35,7 @@
 **作为插件（推荐）**
 
 ```sh
-claude plugin marketplace add lichigo281-spec/motion-film
+claude plugin marketplace add joker124zx/motion-film
 claude plugin install motion-film@motion-film
 ```
 
