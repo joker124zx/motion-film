@@ -1,0 +1,9 @@
+{
+  "name": "motion-film",
+  "version": "1.0.0",
+  "description": "用代码做动态影像：产品宣传片、MG/风格短片、花字、卡点片、单个动效镜头。Make videos in code with a deterministic render(t) toolchain.",
+  "author": { "name": "lichigo281-spec", "url": "https://github.com/lichigo281-spec" },
+  "repository": "https://github.com/lichigo281-spec/motion-film",
+  "license": "MIT",
+  "keywords": ["video", "motion-graphics", "animation", "promo", "remotion", "puppeteer", "ffmpeg", "skill"]
+}

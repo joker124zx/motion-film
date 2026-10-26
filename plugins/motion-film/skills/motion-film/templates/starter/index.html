@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>starter</title>
+<!-- Final films: self-host an OFL font in fonts/ and subset it to the characters you use (references/tech.md §5).
+     @font-face { font-family: 'Title'; src: url('fonts/title-subset.woff2') format('woff2'); font-weight: 900; } -->
+<style>
+  html, body { margin: 0; background: #0e0d12; overflow: hidden; }
+  canvas { display: block; }
+</style>
+<script src="/lib/motion.js"></script>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+// ── A tiny 9.6 s film that exercises the principles: one hero, anticipation → action → follow-through,
+//    accelerating "deal" into real slots, holds after every read, a transition at every seam,
+//    and one timeline that both the picture and the sound read from.
+const M = Motion, { seg, lerp, clamp, kf, pop, spring, squash, accelTimes, E, bezier, hash, camera, shots } = M;
+const W = innerWidth || 1920, H = innerHeight || 1080;
+window.FILM = { width: 1920, height: 1080, fps: 30, duration: 9.6 };
+const FONT = '"Noto Sans CJK SC","PingFang SC","Microsoft YaHei","Source Han Sans SC",system-ui,sans-serif';
+const PAL = { ink: '#16141c', paper: '#f4efe6', bg: '#0e0d12', a: '#ff5a5f', b: '#ffc93c', c: '#3ec6e0', mute: '#2a2733' };
+
+// ── TIMELINE: the single source of truth ──────────────────────────────────────────────
+const T = { a: 0, b: 3.4, c: 6.4, end: 9.6 };
+const TITLE = '动起来';
+const TITLE_T = (i) => T.a + 0.7 + i * 2 / 30;           // per-character pop, 2-frame stagger
+const N_CARDS = 8, DEAL0 = T.b + 0.35;
+const DEAL = accelTimes(N_CARDS, 1.4, 1.8).map((t) => DEAL0 + t);   // faster and faster
+const WORD_T = T.c + 0.6;
+
+// sound events derived from the same numbers (exported by render.mjs --events, mixed by sfx.py)
+window.EVENTS = [
+  { t: T.a + 0.42, kind: 'thump', gain: 0.5, note: 'hero lands after anticipation' },
+  ...[...TITLE].map((_, i) => ({ t: TITLE_T(i) + 0.05, kind: 'pop', variant: i, gain: 0.45 - i * 0.04, note: 'title char ' + i })),
+  { t: T.b, kind: 'whoosh', gain: 0.45, dur: 0.5, note: 'wipe A→B' },
+  ...DEAL.map((t, i) => ({ t: t + 0.28, kind: 'click', variant: i, gain: 0.42 - i * 0.025, pan: (i % 4 - 1.5) / 3, note: 'card ' + i + ' lands' })),
+  { t: T.c + 0.05, kind: 'swoosh', gain: 0.4, note: 'iris B→C' },
+  { t: WORD_T - 1.2, kind: 'riser', dur: 1.2, gain: 0.35, note: 'build to the wordmark' },
+  { t: WORD_T, kind: 'impact', gain: 0.8, note: 'wordmark lands — loudest moment' },
+  { t: WORD_T + 0.12, kind: 'sparkle', gain: 0.35, note: 'afterglow' },
+  { t: 0, kind: 'bed', dur: 9.6, gain: 0.25, note: 'air bed' },
+];
+window.CUES = [
+  { t0: 1.0, t1: 3.4, text: '一个主角' },
+  { t0: 4.0, t1: 6.4, text: '越来越快' },
+];
+// what is readable on screen at t (render.mjs --readcheck)
+window.TEXTS = (t) => {
+  const out = [];
+  if (t >= TITLE_T(TITLE.length - 1) + 0.27 && t < T.b) out.push({ id: 'title', text: TITLE });
+  if (t >= WORD_T + 0.2) out.push({ id: 'word', text: 'MOTION FILM' });
+  for (const c of window.CUES) if (t >= c.t0 && t < c.t1) out.push({ id: 'cue' + c.t0, text: c.text });
+  return out;
+};
+
+// ── drawing ──────────────────────────────────────────────────────────────────────────
+const cv = document.getElementById('c'), x = cv.getContext('2d');
+cv.width = W; cv.height = H;
+const rr = (px, py, w, h, r) => { x.beginPath(); x.roundRect(px, py, w, h, r); };
+
+function grain(t, a = 0.0) { /* grain belongs in ffmpeg (master.sh --grain), not here */ }
+
+function shotA(t, lt, dur) {
+  x.fillStyle = PAL.bg; x.fillRect(0, 0, W, H);
+  const cam = camera(960, 540, lerp(1, 1.06, E.inOutSine(seg(lt, 0, dur))), 0, W, H);  // slow push: camera never dead
+  x.save(); cam.apply(x);
+  // hero: anticipation (rise & stretch) → drop → squash on land → settle
+  const yA = kf(lt, [[0, -260], [0.18, -300, E.outQuad], [0.42, 0, E.inCubic]]);
+  const [sx, sy] = lt < 0.42 ? [1 - 0.12 * seg(lt, 0.2, 0.42), 1 + 0.18 * seg(lt, 0.2, 0.42)] : squash(lt, 0.42, 0.28, 0.3);
+  const settle = spring(lt, 0.42, 6, 3, 7);
+  x.save(); x.translate(960, 470 + yA + settle); x.scale(sx, sy);
+  x.fillStyle = PAL.a; x.beginPath(); x.arc(0, -70, 70, 0, Math.PI * 2); x.fill();
+  x.restore();
+  // shadow tightens as the hero lands
+  const sh = clamp(1 - Math.abs(yA) / 300);
+  x.fillStyle = `rgba(0,0,0,${0.35 * sh})`; x.beginPath(); x.ellipse(960, 476, 80 * (0.5 + 0.5 * sh) * sx, 12, 0, 0, Math.PI * 2); x.fill();
+  // title: per-character pop 0 → 1.15 → 1 over 8 frames, layered stroke (hanazi-style stack)
+  x.font = `900 150px ${FONT}`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.lineJoin = 'round';
+  const chars = [...TITLE], adv = 170, x0 = 960 - (chars.length - 1) * adv / 2;
+  chars.forEach((ch, i) => {
+    const s = pop(t, TITLE_T(i)); if (s <= 0) return;
+    const wig = Math.sin((t - TITLE_T(i)) * 5 + i) * 1.5 * seg(t, TITLE_T(i) + 0.4, TITLE_T(i) + 1);   // living hold
+    x.save(); x.translate(x0 + i * adv, 700); x.rotate((hash(i, 3) - 0.5) * 0.12 + wig * 0.01); x.scale(s, s);
+    x.fillStyle = PAL.mute; x.fillText(ch, 0, 10);                                       // extrude
+    x.strokeStyle = [PAL.a, PAL.b, PAL.c][i % 3]; x.lineWidth = 34; x.strokeText(ch, 0, 0); // coloured outer stroke
+    x.strokeStyle = '#fff'; x.lineWidth = 18; x.strokeText(ch, 0, 0);                  // white stroke
+    x.fillStyle = PAL.ink; x.fillText(ch, 0, 0);                                         // fill
+    x.restore();
+  });
+  x.restore();
+}
+
+// grid slots come from a layout table — the deal lands IN them, never floating above
+const SLOTS = Array.from({ length: N_CARDS }, (_, i) => ({ x: 330 + (i % 4) * 330, y: 360 + Math.floor(i / 4) * 300, w: 280, h: 240 }));
+function shotB(t, lt, dur) {
+  x.fillStyle = PAL.paper; x.fillRect(0, 0, W, H);
+  SLOTS.forEach((s) => { x.strokeStyle = 'rgba(22,20,28,.12)'; x.lineWidth = 2; x.setLineDash([10, 10]); rr(s.x - s.w / 2, s.y - s.h / 2, s.w, s.h, 22); x.stroke(); });
+  x.setLineDash([]);
+  const deck = [1700, 1180];
+  DEAL.forEach((t0, i) => {
+    const s = SLOTS[i], k = seg(t, t0, t0 + 0.28);
+    if (t < t0) return;
+    const e = bezier(0.16, 1, 0.3, 1)(k);                         // fast out, long settle
+    const px = lerp(deck[0], s.x, e), py = lerp(deck[1], s.y, e) - Math.sin(Math.PI * k) * 120;   // arc
+    const rot = lerp(0.5 - hash(i) * 0.3, 0, e) + spring(t, t0 + 0.28, 0.03, 4, 9);
+    x.save(); x.translate(px, py); x.rotate(rot);
+    x.fillStyle = 'rgba(0,0,0,.12)'; rr(-s.w / 2 + 8, -s.h / 2 + 14, s.w, s.h, 22); x.fill();
+    x.fillStyle = '#fff'; rr(-s.w / 2, -s.h / 2, s.w, s.h, 22); x.fill();
+    x.fillStyle = [PAL.a, PAL.b, PAL.c][i % 3]; rr(-s.w / 2 + 24, -s.h / 2 + 24, 64, 64, 16); x.fill();
+    x.fillStyle = 'rgba(22,20,28,.75)'; rr(-s.w / 2 + 24, 10, s.w * 0.6, 18, 9); x.fill();
+    x.fillStyle = 'rgba(22,20,28,.25)'; rr(-s.w / 2 + 24, 42, s.w * 0.4, 14, 7); x.fill();
+    x.restore();
+  });
+  // entrance: wipe that belongs to the shape language (rounded bar sweeping off)
+  const w = seg(lt, 0, 0.4);
+  if (w < 1) {   // the previous shot stays visible on the right of a sweeping colour bar — no blank frame
+    const edge = lerp(-60, W + 60, E.inOutCubic(w));
+    x.save(); x.beginPath(); x.rect(edge, 0, W, H); x.clip(); shotA(t, t - T.a, T.b - T.a); x.restore();
+    x.fillStyle = PAL.a; x.fillRect(edge - 60, 0, 60, H);
+  }
+}
+
+function drawC(t) {
+  x.fillStyle = PAL.ink; x.fillRect(0, 0, W, H);
+  // wordmark drops from above, lands on WORD_T with overshoot, then holds ≥ 1 s
+  const k = seg(t, WORD_T - 0.35, WORD_T);
+  const y = lerp(-200, 540, E.inCubic(k)) + spring(t, WORD_T, -18, 3, 8);
+  const [sx, sy] = squash(t, WORD_T, 0.22, 0.25);
+  x.save(); x.translate(960, y); x.scale(sx, sy);
+  x.font = `900 160px ${FONT}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillStyle = PAL.paper; x.fillText('MOTION FILM', 0, 0);
+  x.restore();
+  // single accent: underline marker that draws once after landing (one light effect, for the hero only)
+  const u = seg(t, WORD_T + 0.25, WORD_T + 0.6);
+  if (u > 0) { x.strokeStyle = PAL.b; x.lineWidth = 14; x.lineCap = 'round'; x.beginPath(); x.moveTo(560, 650); x.lineTo(lerp(560, 1360, E.outCubic(u)), 650 - 8 * u); x.stroke(); }
+}
+
+function shotC(t, lt, dur) {
+  // entrance: iris opens from the last card's slot (match on position); the dealt grid stays under it
+  const ir = seg(lt, 0, 0.5);
+  if (ir < 1) {
+    shotB(t, t - T.b, T.c - T.b);
+    const s = SLOTS[N_CARDS - 1];
+    x.save(); x.beginPath(); x.arc(s.x, s.y, lerp(0, 2300, E.inCubic(ir)), 0, Math.PI * 2); x.clip(); drawC(t); x.restore();
+  } else drawC(t);
+  // exit: fade to black over the last 0.4 s — never just stop
+  const out = seg(t, T.end - 0.4, T.end); if (out > 0) { x.fillStyle = `rgba(0,0,0,${out})`; x.fillRect(0, 0, W, H); }
+}
+
+function subtitles(t) {
+  for (const c of window.CUES) {
+    if (t < c.t0 || t >= c.t1) continue;
+    const a = Math.min(seg(t, c.t0, c.t0 + 0.2), 1 - seg(t, c.t1 - 0.2, c.t1));
+    x.save(); x.globalAlpha = a; x.font = `700 60px ${FONT}`; x.textAlign = 'center'; x.textBaseline = 'middle';
+    const wd = x.measureText(c.text).width + 64;
+    x.fillStyle = 'rgba(14,13,18,.72)'; rr(960 - wd / 2, 960 - 48, wd, 96, 48); x.fill();   // scrim keeps it readable
+    x.fillStyle = '#fff'; x.fillText(c.text, 960, 962 + (1 - a) * 8);
+    x.restore();
+  }
+}
+
+// opening: never start on a hard frame — fade up from black in 0.25 s
+const film = shots([[T.a, shotA], [T.b, shotB], [T.c, shotC]], T.end);
+window.renderAt = (t) => {
+  film(t); subtitles(t);
+  const fin = 1 - seg(t, 0, 0.25); if (fin > 0) { x.fillStyle = `rgba(0,0,0,${fin})`; x.fillRect(0, 0, W, H); }
+};
+document.fonts.ready.then(() => { window.renderAt(0); window.READY = true; });
+</script>
+</body>
+</html>
